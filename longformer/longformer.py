@@ -41,7 +41,7 @@ class LongformerConfig(RobertaConfig):
             attention_dilation: list of attention dilation of length = number of layers.
                 attention dilation of `1` means no dilation.
             autoregressive: do autoregressive attention or have attention of both sides
-            attention_mode: 'n2' for regular n^2 self-attention, 'tvm' for TVM implemenation of Longformer
+            attention_mode: 'n2' for regular n^2 self-attention, 'tvm' for TVM implementation of Longformer
                 selfattention, 'sliding_chunks' for another implementation of Longformer selfattention
         """
         super().__init__(**kwargs)
