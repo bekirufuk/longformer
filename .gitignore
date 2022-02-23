@@ -1,6 +1,9 @@
 
 wandb/
 data/
+experiments/test.py
+experiments/models/longformer_sudo*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
