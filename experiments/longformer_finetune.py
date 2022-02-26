@@ -1,3 +1,4 @@
+from asyncio.log import logger
 from ntpath import join
 import os
 import random
@@ -7,6 +8,7 @@ import pandas as pd
 from datetime import date
 
 import torch
+# from pytorch_lightning.loggers import WandbLogger
 
 import datasets
 from datasets import load_dataset, load_metric
@@ -38,6 +40,7 @@ def data_prep(batch, tokenizer):
 
 if __name__ == '__main__':
 
+    torch.cuda.empty_cache()
     root_dir = os.path.expanduser("experiments")
     data_dir = os.path.expanduser("data/patentsview/example")
     model_dir = os.path.expanduser("models")
@@ -49,29 +52,31 @@ if __name__ == '__main__':
     dataset = datasets.load_dataset('csv', data_files={'train': os.path.join(data_dir, 'train.csv'), 'test': os.path.join(data_dir, 'test.csv')},)
 
     tokenizer = LongformerTokenizerFast.from_pretrained('allenai/longformer-base-4096')
+    tokenizer.to(device)
     model     = LongformerForSequenceClassification.from_pretrained('allenai/longformer-base-4096', num_labels=config.num_labels)
-    
+    model.to(device)
     model.config = LongformerConfig.from_json_file(os.path.join(root_dir, 'longformer_config.json'))
 
     # If sanity_test is True only obtain a small fraction of the data to check if the pipeline is working.
     if sanity_test:
-        train_dataset = dataset['train'].select(range(16))
-        test_dataset  = dataset['test'].select(range(8))
+        train_dataset = dataset['train'].select(range(64))
+        test_dataset  = dataset['test'].select(range(16))
     else:
         train_dataset = dataset['train']
         test_dataset  = dataset['test']
     
     # Tokenize and determine the attention masking for the inputs
-    train_dataset = train_dataset.map(data_prep, batched=True, batch_size=config.batch_size, fn_kwargs={'tokenizer':tokenizer})
-    test_dataset  = test_dataset.map(data_prep, batched=True, batch_size=config.batch_size, fn_kwargs={'tokenizer':tokenizer}) # remove_columns=column_list
-
+    train_dataset = train_dataset.map(data_prep, batched=True, batch_size=config.batch_size, fn_kwargs={'tokenizer':tokenizer},remove_columns=["text", "legth", "patent_id"])
+    test_dataset  = test_dataset.map(data_prep, batched=True, batch_size=config.batch_size, fn_kwargs={'tokenizer':tokenizer},remove_columns=["text", "legth", "patent_id"])
     train_dataset.set_format(
         type="torch",
         columns=["input_ids", "attention_mask", "global_attention_mask", "labels"],
+
         )
     test_dataset.set_format(
         type="torch",
         columns=["input_ids", "attention_mask", "global_attention_mask", "labels"],
+
         )
 
     # Define the trainer
@@ -80,6 +85,8 @@ if __name__ == '__main__':
     if device == 'cuda':
         train_args.fp16 = True
 
+
+    # wandb_logger = WandbLogger(name='fine_tune_'+str(date.today()),project='custom_transformers')
     trainer = Trainer(
         model=model,
         tokenizer=tokenizer,
@@ -87,6 +94,7 @@ if __name__ == '__main__':
         compute_metrics=config.compute_metrics,
         train_dataset=train_dataset,
         eval_dataset=test_dataset,
+        # logger= wandb_logger,
     )
     trainer.train()
     print('Training Complete')

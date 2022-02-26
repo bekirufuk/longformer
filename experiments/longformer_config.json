@@ -1,3 +1,4 @@
+//BigBird shared their config info in their paper. Might be use for testing.
 {
     "_name_or_path": "allenai/longformer-base-4096",
     "attention_mode": "longformer",
