@@ -1,8 +1,18 @@
 from transformers import TrainingArguments
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
+seed = 42
+
+labels_list = ["A","B","C","D","E","F","G","H"]
 num_labels = 8
-batch_size = 2
+
+batch_size = 32
+max_length = 4096 #16384
+
+lr= 5e-5
+num_warmup_steps=0
+num_epochs = 3
+
 
 CustomTrainingArguments = TrainingArguments(
 
@@ -14,8 +24,8 @@ CustomTrainingArguments = TrainingArguments(
     save_strategy='epoch',
     # save_steps = '1' if save_strategy is steps
 
-    num_train_epochs = 2,
-    learning_rate = 5e-5,
+    num_train_epochs = num_epochs,
+    learning_rate = lr,
     weight_decay=0.01,
     # warmup_ratio = 0.1
 
@@ -29,7 +39,7 @@ CustomTrainingArguments = TrainingArguments(
     fp16 = False,
     half_precision_backend="apex",
 
-    seed = 42,
+    seed = seed,
     run_name = 'lonngformer_finetuning',
     output_dir = 'results',
     )
