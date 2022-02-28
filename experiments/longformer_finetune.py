@@ -1,102 +1,105 @@
-from asyncio.log import logger
-from ntpath import join
 import os
-import random
-import json
 import config
 import pandas as pd
-from datetime import date
+
+from tqdm.auto import tqdm
+
+from accelerate import Accelerator
 
 import torch
-# from pytorch_lightning.loggers import WandbLogger
+from torch.utils.data import DataLoader
 
-import datasets
-from datasets import load_dataset, load_metric
+from transformers import LongformerTokenizerFast, LongformerForSequenceClassification, LongformerConfig
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, AdamW, get_scheduler
 
-from IPython.display import display, HTML
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support
-
-from transformers import LongformerTokenizerFast, LongformerForSequenceClassification, Trainer, LongformerConfig, TrainingArguments
+from datasets import Features, Value, ClassLabel, load_dataset
 
 
-def data_prep(batch, tokenizer):
-    inputs = tokenizer(
-        batch["text"],
-        padding="max_length",
-        truncation=True,
-        max_length=4096,
-    )
-    batch["input_ids"] = inputs.input_ids
-    batch["attention_mask"] = inputs.attention_mask
-    #batch['attention_mask'][0] = [1 for i in range(len(batch['input_ids'][0]))]
+def batch_tokenizer(batch):
+    return tokenizer(batch["text"], padding='max_length', truncation=True)
 
-    # create 0 global_attention_mask lists
-    batch["global_attention_mask"] = len(batch["input_ids"]) * [
-        [0 for _ in range(len(batch["input_ids"][0]))]
-    ]
-    batch["labels"] = batch["label"]
-    return batch
+
+device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+data_dir = os.path.expanduser('data/patentsview/example')
+small_scale = True
 
 
 if __name__ == '__main__':
 
     torch.cuda.empty_cache()
-    root_dir = os.path.expanduser("experiments")
-    data_dir = os.path.expanduser("data/patentsview/example")
-    model_dir = os.path.expanduser("models")
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    sanity_test = True
-    model_prefix = 'longformer_sudo_finetuned_'
+    class_names = config.labels_list
+    features = Features({'text': Value('string'), 'label': ClassLabel(names=class_names)})
+    data_files = {"train":os.path.join(data_dir, 'train.csv'), "test":os.path.join(data_dir, 'test.csv')}
 
-    # Load the data in two splits
-    dataset = datasets.load_dataset('csv', data_files={'train': os.path.join(data_dir, 'train.csv'), 'test': os.path.join(data_dir, 'test.csv')},)
-
-    tokenizer = LongformerTokenizerFast.from_pretrained('allenai/longformer-base-4096')
-    tokenizer.to(device)
-    model     = LongformerForSequenceClassification.from_pretrained('allenai/longformer-base-4096', num_labels=config.num_labels)
-    model.to(device)
-    model.config = LongformerConfig.from_json_file(os.path.join(root_dir, 'longformer_config.json'))
-
-    # If sanity_test is True only obtain a small fraction of the data to check if the pipeline is working.
-    if sanity_test:
-        train_dataset = dataset['train'].select(range(64))
-        test_dataset  = dataset['test'].select(range(16))
-    else:
-        train_dataset = dataset['train']
-        test_dataset  = dataset['test']
+    dataset = load_dataset('csv', data_files=data_files, features=features)
     
-    # Tokenize and determine the attention masking for the inputs
-    train_dataset = train_dataset.map(data_prep, batched=True, batch_size=config.batch_size, fn_kwargs={'tokenizer':tokenizer},remove_columns=["text", "legth", "patent_id"])
-    test_dataset  = test_dataset.map(data_prep, batched=True, batch_size=config.batch_size, fn_kwargs={'tokenizer':tokenizer},remove_columns=["text", "legth", "patent_id"])
-    train_dataset.set_format(
-        type="torch",
-        columns=["input_ids", "attention_mask", "global_attention_mask", "labels"],
+    # tokenizer = AutoTokenizer.from_pretrained("bert-base-cased") # Vanilla Usage
+    # tokenizer = AutoTokenizer.from_pretrained("allenai/led-base-16384") # LED model might be used for 16.384 token long inputs.
+    # tokenizer = AutoTokenizer.from_pretrained("allenai/longformer-base-4096") # Longformer Alternative
 
+    tokenizer = LongformerTokenizerFast.from_pretrained('allenai/longformer-base-4096', max_length = config.max_length)
+
+    tokenized_data = dataset.map(batch_tokenizer, batched=True, remove_columns=['text'])
+    tokenized_data = tokenized_data.rename_column("label","labels")
+    tokenized_data.set_format("torch")
+
+    # tokenized_data.save_to_disk(os.path.join(data_dir, "tokenized_data"))
+
+    if small_scale:
+        train_data = tokenized_data["train"].shuffle(seed=config.seed).select(range(32))
+        test_data = tokenized_data["test"].shuffle(seed=config.seed).select(range(16))
+    else:
+        train_data = tokenized_data["train"]
+        test_data = tokenized_data["test"]
+
+    train_dataloader = DataLoader(train_data, shuffle=True, batch_size=config.batch_size)
+    test_dataloader = DataLoader(test_data, shuffle=True, batch_size=config.batch_size)
+
+    model = LongformerForSequenceClassification.from_pretrained('allenai/longformer-base-4096',
+        num_labels = config.num_labels,
+        gradient_checkpointing=True        
         )
-    test_dataset.set_format(
-        type="torch",
-        columns=["input_ids", "attention_mask", "global_attention_mask", "labels"],
 
-        )
+    # config = LongformerConfig()
 
-    # Define the trainer
-    train_args = config.CustomTrainingArguments
-    train_args.run_name = train_args.run_name + str(date.today())
-    if device == 'cuda':
-        train_args.fp16 = True
+    optimizer = AdamW(model.parameters(), lr=config.lr)
 
-
-    # wandb_logger = WandbLogger(name='fine_tune_'+str(date.today()),project='custom_transformers')
-    trainer = Trainer(
-        model=model,
-        tokenizer=tokenizer,
-        args=config.CustomTrainingArguments,
-        compute_metrics=config.compute_metrics,
-        train_dataset=train_dataset,
-        eval_dataset=test_dataset,
-        # logger= wandb_logger,
+    accelerator = Accelerator()
+    train_dataloader, test_dataloader, model, optimizer = accelerator.prepare(
+        train_dataloader, test_dataloader, model, optimizer
     )
-    trainer.train()
-    print('Training Complete')
-    trainer.save_model(os.join(model_dir,model_prefix+str(date.today())))
-    print('Model Saved under models/ with name: '+ model_prefix+str(date.today()))
+    
+    num_training_steps = config.num_epochs * len(train_dataloader)
+    lr_scheduler = get_scheduler(
+        "linear",
+        optimizer=optimizer,
+        num_warmup_steps=config.num_warmup_steps,
+        num_training_steps=num_training_steps
+    )
+    
+    progress_bar = tqdm(range(num_training_steps))
+
+    model.train()
+    for epoch in range(config.num_epochs):
+        for batch in train_dataloader:
+            outputs = model(**batch)
+            loss = outputs.loss
+            accelerator.backward(loss)
+
+            optimizer.step()
+            lr_scheduler.step()
+            optimizer.zero_grad()
+            progress_bar.update(1)
+            
+    """metric = load_metric("accuracy")
+    model.eval()
+    for batch in eval_dataloader:
+        batch = {k: v.to(device) for k, v in batch.items()}
+        with torch.no_grad():
+            outputs = model(**batch)
+
+        logits = outputs.logits
+        predictions = torch.argmax(logits, dim=-1)
+        metric.add_batch(predictions=predictions, references=batch["labels"])
+
+    metric.compute()"""
