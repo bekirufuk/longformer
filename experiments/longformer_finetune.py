@@ -30,21 +30,21 @@ if __name__ == '__main__':
     # Load the dataset from csv file with proper features.
     class_names = config.labels_list
     features = Features({'text': Value('string'), 'label': ClassLabel(names=class_names)})
-    data_files = {"train":os.path.join(config.data_dir, 'train.csv'), "test":os.path.join(config.data_dir, 'test.csv')}
+    data_files = {"train":os.path.join(config.data_dir, 'example/train.csv'), "test":os.path.join(config.data_dir, 'example/test.csv')}
     dataset = load_dataset('csv', data_files=data_files, features=features)
     
     # Load the existing tokenized data if wanted. Create a new one otherwise.
     if config.load_saved_tokens:
-        tokenized_data = load_from_disk(os.path.join(config.data_dir, "tokenized_data"))
+        tokenized_data = load_from_disk(os.path.join(config.data_dir, "example/tokenized_data"))
     else:
         # Utilize the tokenizer and run it on the dataset with batching.
         tokenizer = LongformerTokenizerFast.from_pretrained('allenai/longformer-base-4096', max_length=config.max_length)
         tokenized_data = dataset.map(batch_tokenizer, batched=True, remove_columns=['text'])
         tokenized_data = tokenized_data.rename_column("label","labels")
-        tokenized_data.set_format("torch")
+    tokenized_data.set_format("torch")
     
     if config.save_tokens:
-        tokenized_data.save_to_disk(os.path.join(config.data_dir, "tokenized_data"))
+        tokenized_data.save_to_disk(os.path.join(config.data_dir, "tokenized/patents_"+config.patents_year+"_tokenized"))
 
     #Trim the dataset to a small size for testing purposes.
     if config.small_scale:
@@ -117,3 +117,7 @@ if __name__ == '__main__':
     print("\n----------\n EVALUATION FINISHED \n----------\n")
 
     print("mean of {} batches F1: {}".format(len(test_dataloader),running_score/len(test_dataloader)))
+
+    if config.save_model:
+        model.save_pretrained(os.path.join(config.root_dir,"model/ft_longformer_{0}_{1}".format(len(train_dataloader), running_score/len(test_dataloader))))
+        print("Finetuned model saved.")
