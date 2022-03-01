@@ -1,4 +1,5 @@
 import os
+from tkinter.filedialog import test
 import config
 import pandas as pd
 
@@ -12,21 +13,27 @@ from torch.utils.data import DataLoader
 from transformers import LongformerTokenizerFast, LongformerForSequenceClassification, LongformerConfig
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, AdamW, get_scheduler
 
-from datasets import Features, Value, ClassLabel, load_dataset
+from datasets import Features, Value, ClassLabel, load_dataset, load_metric
 
 
 def batch_tokenizer(batch):
-    return tokenizer(batch["text"], padding='max_length', truncation=True)
+    return tokenizer(batch["text"],
+    padding='max_length',
+    truncation=True
+    )
 
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 data_dir = os.path.expanduser('data/patentsview/example')
-small_scale = True
+small_scale = False
 
 
 if __name__ == '__main__':
 
     torch.cuda.empty_cache()
+
+    accelerator = Accelerator(fp16=True)
+
     class_names = config.labels_list
     features = Features({'text': Value('string'), 'label': ClassLabel(names=class_names)})
     data_files = {"train":os.path.join(data_dir, 'train.csv'), "test":os.path.join(data_dir, 'test.csv')}
@@ -57,14 +64,13 @@ if __name__ == '__main__':
 
     model = LongformerForSequenceClassification.from_pretrained('allenai/longformer-base-4096',
         num_labels = config.num_labels,
-        gradient_checkpointing=True        
+        gradient_checkpointing=True
         )
 
     # config = LongformerConfig()
 
     optimizer = AdamW(model.parameters(), lr=config.lr)
 
-    accelerator = Accelerator()
     train_dataloader, test_dataloader, model, optimizer = accelerator.prepare(
         train_dataloader, test_dataloader, model, optimizer
     )
@@ -78,7 +84,7 @@ if __name__ == '__main__':
     )
     
     progress_bar = tqdm(range(num_training_steps))
-
+    
     model.train()
     for epoch in range(config.num_epochs):
         for batch in train_dataloader:
@@ -90,16 +96,22 @@ if __name__ == '__main__':
             lr_scheduler.step()
             optimizer.zero_grad()
             progress_bar.update(1)
-            
-    """metric = load_metric("accuracy")
+
+    accelerator.free_memory()
+
+    print("Training Completed")
+    print("Evaluation Started")
     model.eval()
-    for batch in eval_dataloader:
+    running_score = 0
+    for batch in test_dataloader:
         batch = {k: v.to(device) for k, v in batch.items()}
         with torch.no_grad():
             outputs = model(**batch)
 
         logits = outputs.logits
         predictions = torch.argmax(logits, dim=-1)
-        metric.add_batch(predictions=predictions, references=batch["labels"])
 
-    metric.compute()"""
+        batch_result = config.compute_metrics(predictions=predictions.cpu(), references=batch["labels"].cpu())['f1']
+        running_score += batch_result
+    print("Evaluation Completed")
+    print("F1: {}".format(running_score/len(test_dataloader)))
