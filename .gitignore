@@ -1,5 +1,5 @@
+model/
 logs/
-apex/
 wandb/
 data/
 experiments/test.py
