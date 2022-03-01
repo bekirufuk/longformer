@@ -1,6 +1,6 @@
 import os
 from tkinter.filedialog import test
-import config
+import config, utils
 import pandas as pd
 
 from tqdm.auto import tqdm
@@ -25,7 +25,8 @@ def batch_tokenizer(batch):
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 data_dir = os.path.expanduser('data/patentsview/example')
-small_scale = False
+root_dir = os.path.expanduser("experiments")
+small_scale = True
 
 
 if __name__ == '__main__':
@@ -53,8 +54,8 @@ if __name__ == '__main__':
     # tokenized_data.save_to_disk(os.path.join(data_dir, "tokenized_data"))
 
     if small_scale:
-        train_data = tokenized_data["train"].shuffle(seed=config.seed).select(range(32))
-        test_data = tokenized_data["test"].shuffle(seed=config.seed).select(range(16))
+        train_data = tokenized_data["train"].shuffle(seed=config.seed).select(range(16))
+        test_data = tokenized_data["test"].shuffle(seed=config.seed).select(range(8))
     else:
         train_data = tokenized_data["train"]
         test_data = tokenized_data["test"]
@@ -62,14 +63,14 @@ if __name__ == '__main__':
     train_dataloader = DataLoader(train_data, shuffle=True, batch_size=config.batch_size)
     test_dataloader = DataLoader(test_data, shuffle=True, batch_size=config.batch_size)
 
+
+    longformer_config = LongformerConfig.from_json_file(os.path.join(root_dir, 'longformer_config.json'))
     model = LongformerForSequenceClassification.from_pretrained('allenai/longformer-base-4096',
-        num_labels = config.num_labels,
-        gradient_checkpointing=True
-        )
-
-    # config = LongformerConfig()
-
-    optimizer = AdamW(model.parameters(), lr=config.lr)
+        config=longformer_config
+    )
+    model.gradient_checkpointing_enable()
+    
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
     train_dataloader, test_dataloader, model, optimizer = accelerator.prepare(
         train_dataloader, test_dataloader, model, optimizer
@@ -85,10 +86,13 @@ if __name__ == '__main__':
     
     progress_bar = tqdm(range(num_training_steps))
     
+    global_attention_mask = utils.attention_mapper(device)
+
     model.train()
+    print("\n----------\n TRAINING STARTED \n----------\n")
     for epoch in range(config.num_epochs):
         for batch in train_dataloader:
-            outputs = model(**batch)
+            outputs = model(**batch, global_attention_mask=global_attention_mask)
             loss = outputs.loss
             accelerator.backward(loss)
 
@@ -111,7 +115,7 @@ if __name__ == '__main__':
         logits = outputs.logits
         predictions = torch.argmax(logits, dim=-1)
 
-        batch_result = config.compute_metrics(predictions=predictions.cpu(), references=batch["labels"].cpu())['f1']
+        batch_result = utils.compute_metrics(predictions=predictions.cpu(), references=batch["labels"].cpu())['f1']
         running_score += batch_result
     print("Evaluation Completed")
     print("F1: {}".format(running_score/len(test_dataloader)))
