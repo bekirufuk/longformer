@@ -17,4 +17,5 @@ def compute_metrics(predictions, references):
 
 def attention_mapper(device):
     global_attention_mask = torch.zeros([config.batch_size, config.max_length], dtype=torch.long, device=device)
+    global_attention_mask[:, 0] = 1
     return global_attention_mask
