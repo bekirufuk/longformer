@@ -1,4 +1,4 @@
-model/
+models/
 logs/
 wandb/
 data/
