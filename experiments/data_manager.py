@@ -13,14 +13,18 @@ def create_data_files(patents, ipcr):
 
         # Replace the letters with integers to create a suitable training input.
         data.replace({'section':config.label2id}, inplace=True)
+        data['section'].astype(int)
+        # data.rename(columns = {'section':'label'}, inplace = True)
 
         # Append the batch to the main data file.
+        print(data.info())
+        print(data.describe())
         data.to_csv(os.path.join(config.data_dir, 'patents_'+config.patents_year+'.csv'),
             sep=',',
             mode='a',
             index=False,
             columns=['text', 'section'],
-            header = ['text','label']
+            header = None
         )
 
         # Seperately write the batches as individual files. (optional)
@@ -36,12 +40,17 @@ def create_data_files(patents, ipcr):
         chunk_count += 1
         print("Chunk {0} -> Total processed patent count: {1}".format(chunk_count, patent_count))
 
+        if config.single_chunk:
+            break
+
     # Write the basic info about process data for ease of use.
-    with open(os.path.join(config.data_dir, "meta/patents_"+config.patents_year+"_meta.json"), "w") as f:
+    with open(os.path.join(config.data_dir, "meta/patents_"+config.patents_year+"_meta.json"), "a") as f:
         f.write(json.dumps({"num_chunks":chunk_count,
                             "chunk_size":config.chunk_size,
                             "num_patents":patent_count
                             }))
+
+
 
 
 if __name__ == '__main__':
@@ -62,8 +71,8 @@ if __name__ == '__main__':
         usecols=['patent_id', 'text'],
         dtype={'patent_id':object, 'text':object},
         engine='c',
-        nrows=300,
         chunksize=config.chunk_size,
+        encoding='utf8',
         )
     print("Patents data chunked with chunk_size={}.".format(config.chunk_size))
 
@@ -73,6 +82,9 @@ if __name__ == '__main__':
 
     print("\n----------\n DATA PROCESSING STARTED \n----------\n")
 
+    pd.DataFrame({}, columns=['text', 'label']).to_csv(os.path.join(config.data_dir, 'patents_'+config.patents_year+'.csv'),
+        index=False
+        )
     create_data_files(patents, ipcr)
 
     print("\n----------\n DATA PROCESSING FINISHED \n----------\n")
