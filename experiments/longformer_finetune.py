@@ -1,6 +1,9 @@
 import os
+from random import seed
+import sys
 import config, utils
 import pandas as pd
+import wandb
 
 from tqdm.auto import tqdm
 
@@ -15,48 +18,73 @@ from datasets import Features, Value, ClassLabel, load_dataset, load_from_disk
 
 
 def batch_tokenizer(batch):
-    return tokenizer(batch["text"],
-    padding='max_length',
-    truncation=True
-    )
+    return tokenizer(batch["text"], padding='max_length', truncation=True)
 
+# Load the existing tokenized data if wanted. Create a new one otherwise.
+def get_tokenized_data():
+    if config.load_saved_tokens:
+        print("Using tokenized data from {}".format("patents_"+config.patents_year+"_tokenized"))
+        tokenized_data = load_from_disk(os.path.join(config.data_dir, "tokenized/patents_"+config.patents_year+"_tokenized"))
+    else:
+        print("Loading dataset from csv to be tokenized...")
+        
+        class_names = config.labels_list
+        features = Features({'text': Value('string'), 'label': ClassLabel(names=class_names)})
+        data_files = os.path.join(config.data_dir, 'patents_'+config.patents_year+'.csv')
+        dataset = load_dataset('csv', data_files=data_files, features=features, cache_dir=os.path.join(config.data_dir, 'cache'))
+        dataset = dataset['train'].train_test_split(test_size=0.2)
+        dataset = dataset.shuffle(seed=config.seed)
+        print('Dataset Loaded:')
+        print(dataset)
+
+        # Upload to huggingfacehub if True and repo name specified
+        if config.upload_to_hf and config.repo_name != '':
+            dataset.push_to_hub("ufukhaman/uspto_patents_2019", private=True)
+
+        # Utilize the tokenizer and run it on the dataset with batching.
+        print("Tokenization Started...")
+        tokenizer = LongformerTokenizerFast.from_pretrained('allenai/longformer-base-4096', max_length=config.max_length)
+        tokenized_data = dataset.map(batch_tokenizer, batched=True, remove_columns=['text'])
+        tokenized_data = tokenized_data.rename_column("label","labels")
+        print("Tokenization Completed")
+
+    tokenized_data.set_format("torch")
+    return tokenized_data
+
+# Save tokenized data to be loaded afterwards
+def save_tokenized_data():
+    print("Saving tokenized data as {}".format("patents_"+config.patents_year+"_tokenized"))
+    tokenized_data.save_to_disk(os.path.join(config.data_dir, "tokenized/patents_"+config.patents_year+"_tokenized"))
+
+
+# If specified, trim the dataset to a small size for testing purposes. Do nothing otherwise.
+def get_partitions():
+    if config.small_scale:
+        print("Small scale enabled.")
+        train_data = tokenized_data["train"].select(range(16))
+        test_data = tokenized_data["test"].select(range(8))
+    else:
+        train_data = tokenized_data["train"]
+        test_data = tokenized_data["test"]
+    return train_data, test_data
 
 if __name__ == '__main__':
-    
+
+    wandb.init(project="custom_transformers", entity="bekirufuk")
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     torch.cuda.empty_cache()
     accelerator = Accelerator(fp16=True)
 
-    # Load the dataset from csv file with proper features.
-    class_names = config.labels_list
-    features = Features({'text': Value('string'), 'label': ClassLabel(names=class_names)})
-    data_files = {"train":os.path.join(config.data_dir, 'example/train.csv'), "test":os.path.join(config.data_dir, 'example/test.csv')}
-    dataset = load_dataset('csv', data_files=data_files, features=features)
-    
-    # Load the existing tokenized data if wanted. Create a new one otherwise.
-    if config.load_saved_tokens:
-        tokenized_data = load_from_disk(os.path.join(config.data_dir, "example/tokenized_data"))
-    else:
-        # Utilize the tokenizer and run it on the dataset with batching.
-        tokenizer = LongformerTokenizerFast.from_pretrained('allenai/longformer-base-4096', max_length=config.max_length)
-        tokenized_data = dataset.map(batch_tokenizer, batched=True, remove_columns=['text'])
-        tokenized_data = tokenized_data.rename_column("label","labels")
-    tokenized_data.set_format("torch")
-    
-    if config.save_tokens:
-        tokenized_data.save_to_disk(os.path.join(config.data_dir, "tokenized/patents_"+config.patents_year+"_tokenized"))
+    tokenized_data = get_tokenized_data()
 
-    #Trim the dataset to a small size for testing purposes.
-    if config.small_scale:
-        train_data = tokenized_data["train"].shuffle(seed=config.seed).select(range(16))
-        test_data = tokenized_data["test"].shuffle(seed=config.seed).select(range(8))
-    else:
-        train_data = tokenized_data["train"]
-        test_data = tokenized_data["test"]
+    if config.save_tokens and not config.load_saved_tokens:
+        save_tokenized_data()
 
-    # Dataloaders for PyTorch implementation.
-    train_dataloader = DataLoader(train_data, shuffle=True, batch_size=config.batch_size)
-    test_dataloader = DataLoader(test_data, shuffle=True, batch_size=config.batch_size)
+    train_data, test_data = get_partitions()
+
+    # Dataloaders for PyTorch implementation. Since the dataset already shuffled, no extra shuffle here.
+    train_dataloader = DataLoader(train_data, batch_size=config.batch_size)
+    test_dataloader = DataLoader(test_data, batch_size=config.batch_size)
 
     # Utilize the model with custom config file specifiyng classification labels.
     longformer_config = LongformerConfig.from_json_file(os.path.join(config.root_dir, 'longformer_config.json'))
@@ -64,6 +92,7 @@ if __name__ == '__main__':
         config=longformer_config
     )
     model.gradient_checkpointing_enable()
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
     # Load the data with accelerator for a better GPU performence. No need to send it into the device.
@@ -119,5 +148,5 @@ if __name__ == '__main__':
     print("mean of {} batches F1: {}".format(len(test_dataloader),running_score/len(test_dataloader)))
 
     if config.save_model:
-        model.save_pretrained(os.path.join(config.root_dir,"model/ft_longformer_{0}_{1}".format(len(train_dataloader), running_score/len(test_dataloader))))
+        model.save_pretrained(os.path.join(config.root_dir,"models/ft_longformer_{0}_{1}".format(len(train_dataloader), running_score/len(test_dataloader))))
         print("Finetuned model saved.")
