@@ -1,6 +1,9 @@
 import os
+import json
+import datetime
 
 
+date = datetime.datetime.now()
 seed = 42
 
 # Directory parameters
@@ -9,20 +12,33 @@ root_dir = os.path.expanduser("experiments")
 patents_year="2019"
 
 # Model parameters.
-label2id= {"A": 0, "B": 1, "C": 2, "D": 3, "E": 4, "F": 5, "G": 6, "H": 7}
+label2id = {"A": 0, "B": 1, "C": 2, "D": 3, "E": 4, "F": 5, "G": 6, "H": 7}
 labels_list = ["A","B","C","D","E","F","G","H"]
 num_labels = 8
+model_name="no_global_attention_medium_scale_0.1"
 
-small_scale = True
-save_model=False
+save_model = True
 load_local_checkpoint = False
 
 # Training parameters.
-batch_size = 2#4
-lr= 5e-5
-weight_decay=1e-2
-num_warmup_steps=0
-num_epochs = 1
+num_epochs = 5
+batch_size = 8
+
+num_train_samples = 16000
+num_test_samples = 1600
+
+num_train_batches = (num_train_samples / batch_size)
+num_test_batches = (num_test_samples / batch_size)
+
+num_train_steps = num_train_batches * num_epochs
+num_test_steps = num_test_batches * num_epochs
+
+lr = 3e-5
+weight_decay = 1e-2
+scheduler_type = 'linear'
+num_warmup_steps = int(0.3 * num_train_steps)
+
+global_attention_mapping = 'none'
 
 # Tokenizer parameters.
 max_length = 4096 #16384
@@ -38,3 +54,40 @@ upload_repo_name = 'ufukhaman/uspto_patents_2019'
 
 download_from_hf = False
 download_repo_name = 'ufukhaman/uspto_patents_2019'
+
+# Logging parameters.
+log_interval = 50
+
+log_name = 'no_global_medium_' + date.strftime("%Y-%m-%d-%H%M")
+
+with open(os.path.join(root_dir, 'longformer_config.json')) as f:
+    model_config = json.load(f)
+
+wandb_config = dict(
+
+    epochs=num_epochs,
+    batch_size=batch_size,
+
+    num_train_samples=num_train_samples,
+    num_test_samples=num_test_samples,
+
+    num_train_batches=num_train_batches,
+    num_test_batches=num_test_batches,
+
+    num_train_steps = num_train_steps,
+    num_test_steps = num_test_steps,
+
+    learning_rate = lr,
+    weight_decay = weight_decay,
+    scheduler_type = scheduler_type,
+    num_warmup_steps = num_warmup_steps,
+
+    global_attention_mapping = global_attention_mapping,
+
+    dataset = 'patents_'+patents_year,
+    model = model_name,
+    input_size = max_length,
+    classes = num_labels,
+    log_interval = log_interval,
+    model_config = model_config
+)
