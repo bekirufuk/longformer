@@ -1,5 +1,6 @@
 import config
 import torch
+import random
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
 
@@ -18,4 +19,10 @@ def compute_metrics(predictions, references):
 def attention_mapper(device):
     global_attention_mask = torch.zeros([config.batch_size, config.max_length], dtype=torch.long, device=device)
     global_attention_mask[:, 0] = 1
+
+    # random.seed(config.seed)
+    # mask_ids = random.sample(range(1, config.max_length), 20)
+    # for i in mask_ids:
+        # global_attention_mask[:, i] = 1
+        
     return global_attention_mask
