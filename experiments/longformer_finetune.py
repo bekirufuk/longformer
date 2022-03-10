@@ -57,20 +57,21 @@ def save_tokenized_data():
     tokenized_data.save_to_disk(os.path.join(config.data_dir, "tokenized/patents_"+config.patents_year+"_tokenized"))
 
 
-# If specified, trim the dataset to a small size for testing purposes. Do nothing otherwise.
+# Trim and partition the dataset based on sample sizes.
 def get_partitions():
-    if config.small_scale:
-        print("Small scale enabled.")
-        train_data = tokenized_data["train"].select(range(16))
-        test_data = tokenized_data["test"].select(range(8))
-    else:
-        train_data = tokenized_data["train"]
-        test_data = tokenized_data["test"]
+    train_data = tokenized_data["train"].select(range(config.num_train_samples))
+    test_data = tokenized_data["test"].select(range(config.num_test_samples))
     return train_data, test_data
 
 if __name__ == '__main__':
-
-    wandb.init(project="custom_transformers", entity="bekirufuk")
+    
+    wandb.init(project="custom_transformers", 
+                entity="bekirufuk", 
+                config=config.wandb_config,
+                job_type='finetuning_test',
+                name=config.log_name,
+                )
+    
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     torch.cuda.empty_cache()
     accelerator = Accelerator(fp16=True)
@@ -106,7 +107,7 @@ if __name__ == '__main__':
 
     # Scheduler for dynamic learning rate.
     lr_scheduler = get_scheduler(
-        "linear",
+        config.scheduler_type,
         optimizer=optimizer,
         num_warmup_steps=config.num_warmup_steps,
         num_training_steps=num_training_steps
@@ -115,13 +116,20 @@ if __name__ == '__main__':
     # Construct a global_attention_mask to decide which tokens will have glabal attention.
     global_attention_mask = utils.attention_mapper(device)
 
+    # Start the logger
     model.train()
     print("\n----------\n TRAINING STARTED \n----------\n")
     for epoch in range(config.num_epochs):
-        for batch in train_dataloader:
+        for batch_id, batch in enumerate(train_dataloader):
             outputs = model(**batch, global_attention_mask=global_attention_mask)
             loss = outputs.loss
             accelerator.backward(loss)
+
+            if batch_id % config.log_interval == 0:
+                logits = outputs.logits
+                predictions = torch.argmax(logits, dim=-1)
+                batch_result = utils.compute_metrics(predictions=predictions.cpu(), references=batch["labels"].cpu())['accuracy']
+                wandb.log({"Training Loss": loss, "Training Accuracy":batch_result})
 
             optimizer.step()
             lr_scheduler.step()
@@ -130,23 +138,33 @@ if __name__ == '__main__':
     accelerator.free_memory()
     print("\n----------\n TRAINING FINISHED \n----------\n")
 
+    num_test_steps = len(test_dataloader)
+    progress_bar = tqdm(range(num_test_steps))
     model.eval()
     print("\n----------\n EVALUATION STARTED \n----------\n")
-    running_score = 0
-    for batch in test_dataloader:
+    running_acc = 0
+    for batch_id, batch in enumerate(test_dataloader):
         batch = {k: v.to(device) for k, v in batch.items()}
         with torch.no_grad():
-            outputs = model(**batch)
+            outputs = model(**batch, global_attention_mask=global_attention_mask)
 
         logits = outputs.logits
         predictions = torch.argmax(logits, dim=-1)
 
-        batch_result = utils.compute_metrics(predictions=predictions.cpu(), references=batch["labels"].cpu())['f1']
-        running_score += batch_result
+        batch_result = utils.compute_metrics(predictions=predictions.cpu(), references=batch["labels"].cpu())
+        running_acc += batch_result['f1']
+        progress_bar.update(1)
+
+        wandb.log({"Test Loss": outputs.loss,
+                "Test Accuracy":batch_result['accuracy'],
+                "Test F1":batch_result['f1'],
+                })
+    mean_f1 = running_acc/num_test_steps
+    wandb.log({"Test Mean-F1":mean_f1})
     print("\n----------\n EVALUATION FINISHED \n----------\n")
 
-    print("mean of {} batches F1: {}".format(len(test_dataloader),running_score/len(test_dataloader)))
+    print("Mean of {} batches F1: {}".format(num_test_steps,mean_f1))
 
     if config.save_model:
-        model.save_pretrained(os.path.join(config.root_dir,"models/ft_longformer_{0}_{1}".format(len(train_dataloader), running_score/len(test_dataloader))))
+        model.save_pretrained(os.path.join(config.root_dir,"models/{0}".format(config.model_name)))
         print("Finetuned model saved.")
