@@ -13,6 +13,7 @@ patents_year="2019"
 
 # Model parameters.
 label2id = {"A": 0, "B": 1, "C": 2, "D": 3, "E": 4, "F": 5, "G": 6, "H": 7}
+id2label =  {0: "A", 1: "B", 2: "C", 3: "D", 4: "E", 5: "F", 6: "G", 7: "H"}
 labels_list = ["A","B","C","D","E","F","G","H"]
 num_labels = 8
 model_name="no_global_attention_medium_scale_0.1"
@@ -34,7 +35,6 @@ num_train_steps = num_train_batches * num_epochs
 num_test_steps = num_test_batches * num_epochs
 
 lr = 3e-5
-weight_decay = 1e-2
 scheduler_type = 'linear'
 num_warmup_steps = int(0.3 * num_train_steps)
 
@@ -78,7 +78,6 @@ wandb_config = dict(
     num_test_steps = num_test_steps,
 
     learning_rate = lr,
-    weight_decay = weight_decay,
     scheduler_type = scheduler_type,
     num_warmup_steps = num_warmup_steps,
 
