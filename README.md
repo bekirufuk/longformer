@@ -1,3 +1,5 @@
+Experiments on this forked repo moved to a separate [repo](https://github.com/bekirufuk/long_doc_classification) and will be continued from there.
+
 # <p align=center>`Longformer`</p>
 `Longformer` and `LongformerEncoderDecoder (LED)` are pretrained transformer models for long documents.
 
